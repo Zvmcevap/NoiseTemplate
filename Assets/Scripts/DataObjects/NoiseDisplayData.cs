@@ -4,11 +4,13 @@ using UnityEngine.UI;
 [CreateAssetMenu]
 public class NoiseDisplayData: UpdatableData
 {
-    [SerializeField]
     public bool showDisplay;
 
-    [SerializeField, Range(10, 4096)]
+    [Range(10, 4096)]
     public int size;
+
+    public bool Colorize, Interpolated;
+
 
 
     public void UpdateDisplay(RawImage displayImage)

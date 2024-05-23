@@ -2,6 +2,7 @@ using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
+using static Unity.Mathematics.math;
 
 
 [BurstCompile(CompileSynchronously = true)]
@@ -12,7 +13,7 @@ struct NoiseJob: IJobFor
     [ReadOnly]
     public NoiseData.SNoiseData noiseData;
     [ReadOnly]
-    public NativeArray<NoiseFilter.SNoiseFilter> noiseFilters;
+    public NativeArray<NoiseFilter.SNoiseFilterGPU> noiseFilters;
 
     [ReadOnly]
     public float normalizer;
@@ -27,61 +28,68 @@ struct NoiseJob: IJobFor
 
         float endValue = 0f;
 
-        Unity.Mathematics.Random prng = new Unity.Mathematics.Random(noiseData.seed);
         for (int oct = 0; oct < noiseFilters.Length; oct++)
         {
-            NoiseFilter.SNoiseFilter noiseFilter = noiseFilters[oct];
-            // Randomizer
-            Unity.Mathematics.Random octavePrng = new Unity.Mathematics.Random(noiseFilter.seed);
-            float3 octaveOffset = noiseData.separateOctaveSeeds ? octavePrng.NextInt(100000) : prng.NextInt(100000);
+            NoiseFilter.SNoiseFilterGPU noiseFilter = noiseFilters[oct];
 
-            float3 sample = new float3(x, y, 0f) / noiseFilter.scale * noiseFilter.frequency * frequency + noiseFilter.offset + octaveOffset;
+            float nfAmplitude = noiseFilter.amplitude;
+            float nfFrequency = noiseFilter.frequency;
+            float nfNormalizer = 0f;
 
-            float noiseValue = 0f;
-            switch (noiseFilter.filterType)
+            float nfValue = 0f;
+            for (int fOct = 0; fOct < noiseFilter.octaves; fOct++)
             {
-                case 0:
-                    noiseValue = noise.cnoise(sample);
-                    break;
-                case 1:
-                    noiseValue = noise.pnoise(sample, noiseFilter.period);
-                    break;
-                case 2:
-                    noiseValue = noise.snoise(sample);
-                    break;
-                case 3:
-                    noiseValue = noise.cellular(sample).x * 2f - 1f;
-                    break;
-                case 4:
-                    noiseValue = noise.cellular(sample).y * 2f - 1f;
-                    break;
-                default:
-                    break;
-            }
-            if (noiseFilter.invert)
-            {
-                noiseValue *= -1;
-            }
-            endValue += noiseValue * noiseFilter.amplitude * amplitude;
 
-            frequency *= noiseData.lacunarity;
+                Unity.Mathematics.Random octavePrng = new Unity.Mathematics.Random((uint)noiseFilter.seed);
+                float3 octaveOffset = octavePrng.NextInt(100);
+
+                float3 sample = new float3(x, y, 0f) / noiseFilter.scale * nfFrequency * frequency + noiseFilter.offset + octaveOffset;
+
+                float noiseValue = 0f;
+                switch (noiseFilter.noiseType)
+                {
+                    case 1: // Perlin
+                        noiseValue = noise.cnoise(sample);
+                        break;
+                    case 2: // Simplex
+                        noiseValue = noise.snoise(sample);
+                        break;
+                    case 3: // Cell
+                        noiseValue = noise.cellular(sample).x;
+                        noiseValue = noiseValue * 2f - 1f;
+                        break;
+                    case 5: // Sinus
+                        noiseValue = noiseData.dimensions == 0 ? sin(sample.x + sample.y) : sin(sample.x + sample.y + sample.z);
+                        break;
+                    default:
+                        break;
+                }
+                nfValue += noiseValue * nfAmplitude;
+
+                nfNormalizer += nfAmplitude;
+                nfFrequency *= noiseFilter.lacunarity;
+                nfAmplitude *= noiseFilter.persistance;
+            }
+            if (nfNormalizer > 0)
+            {
+                nfValue /= nfNormalizer;
+            }
+
+            endValue += nfValue * amplitude;
+
             amplitude *= noiseData.persistence;
+            frequency *= noiseData.lacunarity;
+        }
+        endValue /= normalizer;
+
+        if (noiseData.invert)
+        {
+            endValue *= -1.0f;
         }
         if (noiseData.normalize01)
         {
-            endValue = endValue / (normalizer * 2f) + 0.5f;
+            endValue = endValue * .5f + .5f;
         }
-        if (noiseData.invert)
-        {
-            if (noiseData.normalize01)
-            {
-                endValue = 1 - endValue;
-            }
-            else
-            {
-                endValue *= -1;
-            }
-        }
-        noiseResult[i] = endValue;
+        noiseResult[x + y * noiseData.resolution] = endValue;
     }
 }

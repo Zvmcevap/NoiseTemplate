@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text;
 using UnityEngine;
 
 public static class SaveLoadSystem
@@ -76,4 +77,41 @@ public static class SaveLoadSystem
         return loadedTexture;
 
     }
+
+    public static void SaveDeltaTimesToCsv(string fileName, DeltaTimeTracker[] deltaTimeTrackers)
+    {
+        // Create a StringBuilder to build the CSV content
+        StringBuilder sb = new StringBuilder();
+
+        if (!Directory.Exists(Application.persistentDataPath + "/DeltaTimeTracker/"))
+        {
+            Directory.CreateDirectory(Application.persistentDataPath + "/DeltaTimeTracker/");
+        }
+
+        string filePath = Application.persistentDataPath + "/DeltaTimeTracker/" + fileName + ".csv";
+
+        string header = "NoiseType,";
+        foreach (var keyValue in deltaTimeTrackers[0].trackedData)
+        {
+            header += keyValue.Key + ",";
+        }
+
+        sb.AppendLine(header);
+
+
+        foreach (DeltaTimeTracker deltaTimeTracker in deltaTimeTrackers)
+        {
+            string row = deltaTimeTracker.name + ",";
+            foreach (var kvp in deltaTimeTracker.trackedData)
+            {
+                Debug.Log(kvp.Value);
+                row += kvp.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) + ",";
+            }
+            sb.AppendLine(row);
+        }
+
+        // Write the CSV content to the file
+        File.WriteAllText(filePath, sb.ToString());
+    }
+
 }

@@ -1,36 +1,9 @@
 
-#include "FastNoiseLite.hlsl"
+#include "processnoises.hlsl"
+#include "dataobjects.hlsl"
 
-// Each #kernel tells which function to compile; you can have many kernels
-#pragma kernel GenerateNoise2D
+#pragma kernel GenerateNoise
 
-
-// Data Structures
-struct NoiseData
-{
-        // Basic Data
-    int resolution;
-    int normalize01;
-    int invert;
-    int seed;
-    int separateOctaveSeeds;
-    float persistence;
-    float lacunarity;
-};
-
-struct NoiseFilter
-{
-    int seed;
-    int filterType;
-    int invert;
-    float3
-            offset,
-            scale,
-            period;
-    float amplitude;
-    float frequency;
-
-};
 
 // Main Result
 RWStructuredBuffer<float> noiseResults;
@@ -39,20 +12,15 @@ RWStructuredBuffer<float> noiseResults;
 StructuredBuffer<NoiseData> noiseDataBuffer;
 StructuredBuffer<NoiseFilter> noiseFilters;
 
+
 // Other Data
 int octaves;
+int resolution;
 float normalizer;
-/*
-#define FNL_NOISE_OPENSIMPLEX2 0
-#define FNL_NOISE_OPENSIMPLEX2S 1
-#define FNL_NOISE_CELLULAR 2
-#define FNL_NOISE_PERLIN 3
-#define FNL_NOISE_VALUE_CUBIC 4
-#define FNL_NOISE_VALUE 5
-typedef int fnl_noise_type;
-*/
-[numthreads(32, 32,1)]
-void GenerateNoise2D (uint3 id : SV_DispatchThreadID)
+
+
+[numthreads(16, 16, 1)]
+void GenerateNoise(uint3 id : SV_DispatchThreadID)
 {
     // Get noise data and the index
     NoiseData noiseData = noiseDataBuffer[0];
@@ -65,67 +33,60 @@ void GenerateNoise2D (uint3 id : SV_DispatchThreadID)
     }
 
     // Create and configure noise state and get the noiseData
-    fnl_state noise = fnlCreateState((int) noiseData.seed);
-
     float amplitude = 1.0;
     float frequency = 1.0;
+    float dataNormalizer = 0.;
 
     float endValue = 0.0;
 
     for (int oct = 0; oct < octaves; oct++)
     {
         NoiseFilter noiseFilter = noiseFilters[oct];
-
-
-        float2 sample = (float2(x, y) * noiseFilter.frequency * frequency / noiseFilter.scale.xy) + noiseFilter.offset.xy;
-
-        float noiseValue = 0.0;
-        switch (noiseFilter.filterType)
+        
+        float fOctNormalizer = 0.;
+        float fFrequency = noiseFilter.frequency;
+        float fAmplitude = noiseFilter.amplitude;
+        
+        float nfValue = 0.;
+        for (int fOct = 0; fOct < noiseFilter.octaves; fOct++)
         {
-            case 0:
-                noise.noise_type = FNL_NOISE_PERLIN;
-                break;
-            case 1:
-                noise.noise_type = FNL_NOISE_OPENSIMPLEX2S;
-                break;
-            case 2:
-                noise.noise_type = FNL_NOISE_OPENSIMPLEX2;
-                break;
-            case 3:
-                noise.noise_type = FNL_NOISE_CELLULAR;
-                noise.cellular_return_type = FNL_CELLULAR_RETURN_TYPE_DISTANCE;
-                break;
-            case 4:
-                noise.noise_type = FNL_NOISE_CELLULAR;
-                noise.cellular_return_type = FNL_CELLULAR_RETURN_TYPE_DISTANCE2;
-                break;
-            default:
-                break;
-        }
-        noiseValue = fnlGetNoise2D(noise, sample.x, sample.y);
-        if (noiseFilter.invert)
-        {
-            noiseValue *= -1.0;
-        }
-        endValue += noiseValue * noiseFilter.amplitude * amplitude;
+            float3 sample = (float3(x, y, 0.0) * fFrequency * frequency / noiseFilter.scale) + noiseFilter.offset + random3(noiseFilter.seed + fOct) * 100.;
+            
+            // Domain warp
+            if (noiseFilter.useDomainWarp)
+            {
+                sample = DoDomainWarp(sample, noiseFilter.dWNoiseType, noiseFilter.dWOctaves, noiseFilter.dWScale, noiseFilter.dWAmplitude, noiseFilter.dWFrequency, noiseFilter.dWPersistance, noiseFilter.dWLacunarity);
+            }
+            
+            // Do noise
+            float noiseValue = ProcessNoiseFilter(noiseFilter, noiseData, sample);
+            
+            nfValue += noiseValue * fAmplitude;
 
-        frequency *= noiseData.lacunarity;
+            fOctNormalizer += fAmplitude;
+            fFrequency *= noiseFilter.lacunarity;
+            fAmplitude *= noiseFilter.persistance;
+        }
+        if (fOctNormalizer > 0)
+        {
+            nfValue /= fOctNormalizer;
+        }
+        
+        endValue += nfValue * amplitude;
+        dataNormalizer += amplitude;
+        
         amplitude *= noiseData.persistence;
+        frequency *= noiseData.lacunarity;
+    }
+    endValue /= dataNormalizer;
+    
+    if (noiseData.invert)
+    {
+        endValue *= -1.0;
     }
     if (noiseData.normalize01)
     {
-        endValue = endValue / (normalizer * 2.0) + 0.5;
-    }
-    if (noiseData.invert)
-    {
-        if (noiseData.normalize01)
-        {
-            endValue = 1.0 - endValue;
-        }
-        else
-        {
-            endValue *= -1.0;
-        }
+        endValue = endValue * .5 + .5;
     }
     noiseResults[x + y * noiseData.resolution] = endValue;
 }
